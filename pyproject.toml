@@ -1,0 +1,54 @@
+[project]
+name = "peek"
+version = "0.1.0"
+description = "Peek: double-tap Control to find and answer the questions on your screen (macOS menu-bar app)"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "pyobjc-core>=13.0",
+    "pyobjc-framework-Cocoa>=13.0",
+    "pyobjc-framework-Quartz>=13.0",
+    "keyring>=25",
+    "pyobjc-framework-screencapturekit>=13.0",
+    "pyobjc-framework-vision>=13.0",
+    "pillow>=11",
+    "anthropic>=2.10",
+    "pydantic>=2.12",
+    "pyobjc-framework-servicemanagement>=13.0",
+    "google-genai>=1",
+    "openai>=3.55.1",
+    "pyjwt[crypto]>=2.8",
+    # cryptography 49+ ships macOS wheels for Apple Silicon only; the Intel build
+    # (PEEK_ARCH=x86_64) needs the last universal2 release (uv's lock then uses it
+    # on both architectures).
+    "cryptography>=46,<49; platform_machine == 'x86_64'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.14",
+    "py2app>=0.28.10",
+    "setuptools",
+]
+
+[tool.uv]
+# Peek is an app, not a library: uv manages the venv and lockfile only.
+# py2app's setup.py lives in packaging/ (py2app refuses a project whose
+# pyproject declares dependencies next to setup.py).
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["build", "dist", "docs"]
+
+[tool.ruff.lint]
+# No pep8-naming: PyObjC selectors (applicationDidFinishLaunching_) must keep their names.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # the UI uses ⌃ ⌘ · … on purpose
