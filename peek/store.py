@@ -30,6 +30,11 @@ ANTHROPIC_KEY = "anthropic_api_key"
 # --- settings -----------------------------------------------------------------
 
 
+DEFAULT_WORK_BOX = (0.62, 0.12, 0.34, 0.5)  # right side of the screen
+DEFAULT_WORK_RGB = (255, 204, 0)  # the multiple-choice letter's yellow (owner's default)
+MIN_WORK_BOX = 0.08  # the box's smallest width and height, as a fraction of the display
+
+
 @dataclass
 class Settings:
     provider: str = "claude"
@@ -46,6 +51,15 @@ class Settings:
     model_lists: dict[str, list[str]] = field(default_factory=dict)
     # Menu toggle: use the provider's most capable (and priciest) model. Manual only.
     hard_mode: bool = False
+    # Settings → Hotkeys & capture → Save questions: a picture of each question (no
+    # answers) is written to this folder after every capture. Off by default.
+    save_questions: bool = False
+    save_questions_folder: str = ""
+    # Settings → Show work: the model also returns its working, drawn in a box on
+    # screen. The box is x, y, w, h as fractions of the display (top-left origin).
+    show_work: bool = False
+    work_box: list[float] = field(default_factory=lambda: list(DEFAULT_WORK_BOX))
+    work_rgb: list[int] = field(default_factory=lambda: list(DEFAULT_WORK_RGB))
 
     def model_for(self, provider: str) -> str | None:
         return self.models.get(provider)
@@ -93,7 +107,30 @@ def load_settings() -> Settings:
         settings.double_tap_ms = defaults.double_tap_ms
     if settings.answer_text_size not in TEXT_SIZES:
         settings.answer_text_size = defaults.answer_text_size
+    settings.work_box = valid_work_box(settings.work_box)
+    if not (
+        len(settings.work_rgb) == 3
+        and all(type(c) is int and 0 <= c <= 255 for c in settings.work_rgb)
+    ):
+        settings.work_rgb = list(DEFAULT_WORK_RGB)
+    if not isinstance(settings.save_questions_folder, str):
+        settings.save_questions_folder = ""
     return settings
+
+
+def valid_work_box(box) -> list[float]:
+    """The box as 4 floats inside the display, at least MIN_WORK_BOX big; else the
+    default box."""
+    try:
+        x, y, w, h = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return list(DEFAULT_WORK_BOX)
+    values = (x, y, w, h)
+    if not all(v == v and abs(v) != float("inf") for v in values):  # NaN, inf
+        return list(DEFAULT_WORK_BOX)
+    w, h = min(max(w, MIN_WORK_BOX), 1.0), min(max(h, MIN_WORK_BOX), 1.0)
+    x, y = min(max(x, 0.0), 1.0 - w), min(max(y, 0.0), 1.0 - h)
+    return [round(x, 4), round(y, 4), round(w, 4), round(h, 4)]
 
 
 def save_settings(settings: Settings) -> None:

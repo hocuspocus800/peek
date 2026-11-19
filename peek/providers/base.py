@@ -78,9 +78,11 @@ class VisionProvider(ABC):
         *,
         extra_images: Sequence[tuple[str, SentImage]] = (),
         on_stream: Callable[[Callable[[], None]], None] | None = None,
+        show_work: bool = False,
     ) -> SolveResult:
         """Blocking; runs on a solve thread. extra_images are (caption, image) pairs
-        sent after the screenshot. Raises ProviderError."""
+        sent after the screenshot. show_work asks for each question's working too
+        (schema.request_format). Raises ProviderError."""
 
     @abstractmethod
     def test_connection(self, model: str) -> None:

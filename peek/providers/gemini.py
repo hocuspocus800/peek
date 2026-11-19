@@ -23,7 +23,7 @@ from collections.abc import Callable, Sequence
 from peek.imaging import SentImage
 from peek.providers.base import ModelInfo, ProviderError, SolveResult, VisionProvider
 from peek.providers.catalog import PROVIDERS, pretty_model_name
-from peek.schema import PORTABLE_SCHEMA, SYSTEM_PROMPT
+from peek.schema import request_format
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +100,7 @@ class GeminiProvider(VisionProvider):
         *,
         extra_images: Sequence[tuple[str, SentImage]] = (),
         on_stream: Callable[[Callable[[], None]], None] | None = None,
+        show_work: bool = False,
     ) -> SolveResult:
         types = self._types
         parts = [types.Part.from_bytes(data=image.data, mime_type=image.media_type)]
@@ -107,10 +108,11 @@ class GeminiProvider(VisionProvider):
             parts.append(types.Part.from_text(text=caption))
             parts.append(types.Part.from_bytes(data=extra.data, mime_type=extra.media_type))
         parts.append(types.Part.from_text(text=user_text))
+        system, schema = request_format(show_work)
         config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=system,
             response_mime_type="application/json",
-            response_json_schema=PORTABLE_SCHEMA,
+            response_json_schema=schema,
             media_resolution=types.MediaResolution.MEDIA_RESOLUTION_HIGH,
         )
         cancelled = threading.Event()

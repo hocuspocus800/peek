@@ -44,9 +44,10 @@ from peek import BUNDLE_ID, __version__, debug, permissions, store
 from peek.capture import target_displays
 from peek.controller import Controller, Effect, Outcome, Phase
 from peek.event_tap import HotkeyTap, describe_grant
+from peek.geometry import Rect
 from peek.hotkeys import Family
 from peek.icons import StatusIcon
-from peek.layout import LayoutInput, layout
+from peek.layout import LayoutInput, layout, layout_work
 from peek.log import entry_point
 from peek.menu import StatusMenu
 from peek.ocr import Recognizer
@@ -214,6 +215,7 @@ class AppDelegate(NSObject):
         self.icon = None
         self.menu = None
         self.last_capture = None  # (question_count, time.time()) or None
+        self.save_problem: str | None = None  # Save questions: why the last save failed
         self.diag = {"keychain": "not run"}
         self.diag_items = {}
         self.hotkeys: HotkeyTap | None = None
@@ -412,15 +414,18 @@ class AppDelegate(NSObject):
     def _settings_changed(self) -> None:
         """Called by Settings after the key or the model changed."""
         old_size, old_provider = self.settings.answer_text_size, self.provider
+        old_work = (self.settings.show_work, self.settings.work_box, self.settings.work_rgb)
         self.settings = store.load_settings()
+        new_work = (self.settings.show_work, self.settings.work_box, self.settings.work_rgb)
         if self.provider != old_provider:
             log.info("Provider: %s", self.spec.name)
             self.has_key = None  # the new provider's key is read below
             self._refresh_provider_status()
         if self.hotkeys is not None:
             self.hotkeys.set_gap_ms(self.settings.double_tap_ms)
-        if self.settings.answer_text_size != old_size and self._last_result and self.ctl.answers:
-            self._lay_out(self._last_result)  # redraw the answers on screen at the new size
+        restyled = self.settings.answer_text_size != old_size or new_work != old_work
+        if restyled and self._last_result and self.ctl.answers:
+            self._lay_out(self._last_result)  # redraw: new text size, work box or colour
         if self._unsaved_hard_mode is not None:
             self.settings.hard_mode = self._unsaved_hard_mode  # the user's last choice
             self._save_hard_mode()
@@ -552,10 +557,17 @@ class AppDelegate(NSObject):
         self.last_answers = []
         self.last_capture = None
         generation = self.generation
+        s = self.settings
         solve = (
             None
             if self.self_test_remaining
-            else SolveConfig(self.provider, self._model(), self.key_cache)
+            else SolveConfig(
+                self.provider,
+                self._model(),
+                self.key_cache,
+                show_work=s.show_work,
+                save_folder=s.save_questions_folder if s.save_questions else "",
+            )
         )
 
         def submit() -> None:
@@ -607,6 +619,12 @@ class AppDelegate(NSObject):
                 f"at {time.strftime('%H:%M:%S')}"
             )
         questions = result.questions
+        self.save_problem = next(
+            (d.analysis.save_error for d in result.displays if d.analysis.save_error), None
+        )
+        saved = sum(d.analysis.saved for d in result.displays)
+        if saved:
+            log.info("Capture g%d: %d question picture(s) saved", generation, saved)
         placed = self._lay_out(result) if questions else 0
         self._last_result = result if placed else None
         if questions and placed:
@@ -673,6 +691,12 @@ class AppDelegate(NSObject):
                 d.target.frame.w,
                 d.target.frame.h,
             )
+            work = None
+            if self.settings.show_work:
+                bx, by, bw, bh = self.settings.work_box
+                box = Rect(bx * size[0], by * size[1], bw * size[0], bh * size[1])
+                rgb = tuple(self.settings.work_rgb)
+                work = layout_work(d.analysis.questions, box, rgb, measure)
             items = layout(
                 LayoutInput(
                     questions=d.analysis.questions,
@@ -683,13 +707,17 @@ class AppDelegate(NSObject):
                     view_width=size[0],
                     view_height=size[1],
                     fixed_font_size=self.settings.answer_text_size or None,
+                    reserved=[work.rect] if work is not None else [],
                 ),
                 measure,
                 ink_height,
             )
+            answers = len(items)  # the working is not an answer: never counted as one
+            if work is not None and answers:
+                items.append(work)  # shown and hidden with the answers
             if not self.overlay.set_items(d.target.display_id, items):
                 continue  # the display went away during the capture
-            placed += len(items)
+            placed += answers
             if d.debug_dir:
                 folder, scale = Path(d.debug_dir), d.scale
                 threading.Thread(
@@ -869,7 +897,10 @@ class AppDelegate(NSObject):
         else:
             # Wall-clock time: time.monotonic() stops while the Mac sleeps.
             count, at = self.last_capture
-            self.menu.set_last_capture(last_capture_line(count, time.time() - at))
+            line = last_capture_line(count, time.time() - at)
+            if self.save_problem:
+                line += " · not saved"  # Save questions failed (details in the log)
+            self.menu.set_last_capture(line)
         has_answers = self.overlay is not None and self.overlay.has_answers
         self.menu.set_answers(available=has_answers, visible=self.answers_visible)
         if self.diag_items:

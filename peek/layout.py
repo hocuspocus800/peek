@@ -23,6 +23,7 @@ the overlay view of that display (flipped, top-left origin, the screen's size).
 
 from __future__ import annotations
 
+import re
 import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -89,6 +90,7 @@ class LayoutInput:
     view_height: float
     block_texts: dict[str, str] | None = None  # OCR text by block id (for font size)
     fixed_font_size: float | None = None  # Settings → Overlay → Text size, if not "match"
+    reserved: Sequence[Rect] = ()  # view points answers keep clear of (the work box)
 
 
 def _to_pt(r: Rect, scale: float) -> Rect:
@@ -258,7 +260,7 @@ def layout(
     blocks_pt = {bid: _to_pt(r, inp.scale) for bid, r in inp.block_rects_px.items()}
     texts_by_id = inp.block_texts or {}
     view = Rect(EDGE, EDGE, inp.view_width - 2 * EDGE, inp.view_height - 2 * EDGE)
-    placed: list[Rect] = []
+    placed: list[Rect] = list(inp.reserved)
     items: list[DrawItem] = []
     question_blocks = {
         b for q in inp.questions for b in (*q.question_block_ids, *q.target_block_ids)
@@ -440,3 +442,108 @@ def layout(
         items.append(DrawItem(q.id, text, rect, font, rgb, q.target_kind, name))
         placed.append(rect)
     return items
+
+
+# --- Show work -----------------------------------------------------------------------
+
+MIN_WORK_FONT, MAX_WORK_FONT = 6.0, 28.0
+WORK_PAD = 6.0  # points between the box's edge and the text
+
+
+_LABEL_WORDS = r"(?:q|question|problem|part|ex|exercise|item)"
+
+
+def _work_label(question_id: str, index: int) -> str:
+    """The question's own label: 'A', '1', '3a', 'B' for ids like 'A', 'q1',
+    'question_3a', 'partB'; otherwise the id as the model gave it (short, unique).
+    The position is used only for an empty id, so a label never names the wrong
+    question."""
+    qid = question_id.strip()
+    m = re.fullmatch(_LABEL_WORDS + r"?[\s_.#-]*([0-9]+[a-z]?|[a-z])", qid, re.IGNORECASE)
+    if m:
+        label = m.group(1)
+        return label.upper() if label.isalpha() else label
+    return qid or str(index + 1)
+
+
+def work_text(questions: Sequence[ParsedQuestion]) -> str:
+    """Every question's working, one after another, each starting with its label;
+    a blank line between questions."""
+    labels = [_work_label(q.id, i) for i, q in enumerate(questions)]
+    repeated = {label for label in labels if labels.count(label) > 1}
+    parts = []
+    for index, q in enumerate(questions):
+        lines = [line for line in q.work.split("\n") if line.strip()]
+        if not lines:
+            continue
+        label = labels[index] if labels[index] not in repeated else q.id  # ids are unique
+        lines[0] = f"{label}.  {lines[0]}"
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
+
+
+def _wrap_all(text: str, font: float, max_w: float, measure: Measure) -> list[str]:
+    """Every line of *text* wrapped to max_w (no line limit); blank lines kept."""
+    out: list[str] = []
+    for line in text.split("\n"):
+        rest = line.strip()
+        if not rest:
+            out.append("")
+            continue
+        while rest:
+            piece = _first_line(rest, font, max_w, measure)
+            out.append(piece)
+            rest = rest[len(piece) :].lstrip()
+    return out
+
+
+def layout_work(
+    questions: Sequence[ParsedQuestion],
+    box: Rect,
+    rgb: RGB,
+    measure: Measure,
+) -> DrawItem | None:
+    """The working in *box* (view points), at the largest size that fits all of it.
+
+    Only when even MIN_WORK_FONT is too big (a very small box, a lot of working) is
+    the text cut, with an ellipsis on the last line that fits."""
+    text = work_text(questions)
+    if not text:
+        return None
+    inner = Rect(box.x + WORK_PAD, box.y + WORK_PAD, box.w - 2 * WORK_PAD, box.h - 2 * WORK_PAD)
+    if inner.w <= 1 or inner.h <= 1:
+        return None
+
+    def shaped(font: float) -> tuple[list[str], float]:
+        lines = _wrap_all(text, font, inner.w, measure)
+        return lines, measure("Ag", font)[1] * len(lines)
+
+    # No larger than the size at which the widest word still fits on a line, so a
+    # number is never split across lines while a smaller size would keep it whole.
+    widest = max(text.split(), key=lambda t: measure(t, MAX_WORK_FONT)[0])
+    word_cap = MAX_WORK_FONT
+    while word_cap > MIN_WORK_FONT and measure(widest, word_cap)[0] > inner.w:
+        word_cap = max(MIN_WORK_FONT, word_cap * inner.w / measure(widest, word_cap)[0] - 0.05)
+    lo, hi = MIN_WORK_FONT, word_cap
+    lines, height = shaped(lo)
+    font = lo
+    if height <= inner.h:
+        while hi - lo > 0.25:  # the largest size that still fits
+            mid = (lo + hi) / 2
+            mid_lines, mid_height = shaped(mid)
+            if mid_height <= inner.h:
+                lo, lines, height = mid, mid_lines, mid_height
+            else:
+                hi = mid
+        font = lo
+    else:
+        line_h = measure("Ag", font)[1]
+        keep = max(1, int(inner.h // line_h))
+        if keep < len(lines):
+            lines = [*lines[: keep - 1], _fit(lines[keep - 1] + " …", font, inner.w, measure)[0]]
+            if not lines[-1].endswith("…"):
+                lines[-1] = _fit(lines[-1] + "…", font, inner.w, measure)[0]
+        height = line_h * len(lines)
+    width = max((measure(line, font)[0] for line in lines if line), default=0.0)
+    rect = Rect(inner.x, inner.y, min(width, inner.w), height)
+    return DrawItem("work", "\n".join(lines), rect, font, rgb, "work", "work_box")

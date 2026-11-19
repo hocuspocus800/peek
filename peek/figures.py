@@ -518,13 +518,11 @@ class ZoomedFigure:
         return self.gain(sent_scale) >= MIN_ZOOM_GAIN
 
 
-def zoomed_figures(
+def figure_regions(
     cgimage, width: int, height: int, text_boxes_px: Sequence, scale: float
-) -> list[ZoomedFigure]:
-    """Detect diagrams and encode an enlarged copy of each, ready to send."""
-    import Quartz
-
-    regions = find_figure_regions(
+) -> list[Rect]:
+    """Every diagram on the capture, in capture pixels, largest first (no cap)."""
+    return find_figure_regions(
         edge_grid(cgimage, width, height, scale),
         text_boxes_px,
         width,
@@ -532,6 +530,23 @@ def zoomed_figures(
         scale,
         limit=None,  # the cap applies to the views that are worth sending
     )
+
+
+def zoomed_figures(
+    cgimage,
+    width: int,
+    height: int,
+    text_boxes_px: Sequence,
+    scale: float,
+    *,
+    regions: Sequence[Rect] | None = None,
+) -> list[ZoomedFigure]:
+    """Detect diagrams (or take *regions* from figure_regions) and encode an
+    enlarged copy of each, ready to send."""
+    import Quartz
+
+    if regions is None:
+        regions = figure_regions(cgimage, width, height, text_boxes_px, scale)
     # Judged against the screenshot as normally sent (high-resolution tier). A view
     # that adds nothing there is not encoded at all; the rare standard-tier retry
     # then goes without it.

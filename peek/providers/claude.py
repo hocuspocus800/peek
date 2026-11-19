@@ -25,7 +25,7 @@ import httpx2
 from peek.imaging import SentImage
 from peek.providers.base import ModelInfo, ProviderError, SolveResult, VisionProvider
 from peek.providers.catalog import CLAUDE_MODELS, PROVIDERS
-from peek.schema import PORTABLE_SCHEMA, SYSTEM_PROMPT
+from peek.schema import request_format
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ class ClaudeProvider(VisionProvider):
         *,
         extra_images: Sequence[tuple[str, SentImage]] = (),
         on_stream: Callable[[Callable[[], None]], None] | None = None,
+        show_work: bool = False,
     ) -> SolveResult:
         """extra_images are (caption, image) pairs sent after the screenshot, each
         caption just before its image (the zoomed figure views). on_stream receives
@@ -102,12 +103,13 @@ class ClaudeProvider(VisionProvider):
         for caption, extra in extra_images:
             content += [{"type": "text", "text": caption}, _image_block(extra)]
         content.append({"type": "text", "text": user_text})
+        system, schema = request_format(show_work)
         kwargs = dict(
             model=model,
             max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=system,
             messages=[{"role": "user", "content": content}],
-            output_config={"format": {"type": "json_schema", "schema": PORTABLE_SCHEMA}},
+            output_config={"format": {"type": "json_schema", "schema": schema}},
         )
         try:
             if model in _NO_SERVER_FALLBACK:

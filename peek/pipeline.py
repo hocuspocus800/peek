@@ -31,9 +31,10 @@ import objc
 from PyObjCTools import AppHelper
 
 from peek import capture as capture_mod
-from peek import debug
+from peek import debug, question_pictures
 from peek.capture import CaptureError, DisplayTarget
-from peek.figures import ZoomedFigure, zoomed_figures
+from peek.figures import ZoomedFigure, figure_regions, zoomed_figures
+from peek.geometry import Rect
 from peek.imaging import HIGH_RES, STANDARD, encode_for_model, fit_size
 from peek.ocr import OcrBlock, OcrCancelled, Recognizer
 from peek.providers import catalog
@@ -98,6 +99,8 @@ class SolveConfig:
     provider: str  # "claude" | "gemini" (providers/catalog.py)
     model: str
     key_cache: SecretCache  # read off the main thread (the Keychain may prompt)
+    show_work: bool = False  # Settings → Show work: ask for each question's working
+    save_folder: str = ""  # Settings → Save questions: where the pictures go ("" = off)
 
 
 @dataclass
@@ -113,6 +116,8 @@ class Analysis:
     fallback_used: bool = False
     error: ProviderError | None = None
     styles: dict[str, TextStyle] = field(default_factory=dict)  # by question id
+    saved: int = 0  # Save questions: pictures written
+    save_error: str | None = None  # short and safe, for the log and the menu
 
 
 @dataclass
@@ -198,10 +203,12 @@ def solve_into(
     token: CancelToken | None = None,
     debug_folder: Path | None = None,
     scale: float = 2.0,
+    display_index: int = 0,
 ) -> None:
     """Ask the model about one capture and fill *analysis*. Never raises anything
     but Superseded: every failure ends up in analysis.error, with the OCR blocks
-    kept. *scale* is capture pixels per point (diagram detection works in points)."""
+    kept. *scale* is capture pixels per point (diagram detection works in points).
+    With Save questions on, each question's picture is written after parsing."""
     started = time.monotonic()
     blocks = analysis.blocks
     try:
@@ -219,7 +226,7 @@ def solve_into(
             raise ProviderError("not_configured", f"Add your {spec.vendor} API key in Settings")
         provider = spec.create(key)
         normalized = spec.frame == "normalized"
-        figures = _zoomed_figures(cgimage, width, height, blocks, scale)
+        regions, figures = _figures(cgimage, width, height, blocks, scale)
         if debug_folder is not None:
             for k, fig in enumerate(figures, 1):
                 (debug_folder / f"figure-{k}.{_ext(fig.image)}").write_bytes(fig.image.data)
@@ -262,6 +269,7 @@ def solve_into(
                     solve.model,
                     extra_images=[(c, f.image) for c, f in zip(captions, views, strict=True)],
                     on_stream=token.add_closer if token is not None else None,
+                    show_work=solve.show_work,
                 )
                 break
             except ProviderError as exc:
@@ -292,6 +300,9 @@ def solve_into(
         analysis.dropped = parsed.dropped
         analysis.problems = parsed.problems
         analysis.styles = _question_styles(cgimage, blocks, parsed.questions)
+        if solve.save_folder and parsed.questions:
+            check()
+            _save_pictures(analysis, cgimage, width, height, regions, solve, scale, display_index)
         if debug_folder is not None:
             (debug_folder / "questions.json").write_text(
                 json.dumps(
@@ -333,15 +344,22 @@ def solve_into(
         analysis.solve_ms = (time.monotonic() - started) * 1000
 
 
-def _zoomed_figures(cgimage, width: int, height: int, blocks, scale: float) -> list[ZoomedFigure]:
-    """Enlarged copies of the diagrams on the capture; none if detection fails (the
-    screenshot alone still gets an answer)."""
+def _figures(
+    cgimage, width: int, height: int, blocks, scale: float
+) -> tuple[list[Rect], list[ZoomedFigure]]:
+    """Every diagram region on the capture, and enlarged copies of the ones worth
+    sending; none if detection fails (the screenshot alone still gets an answer)."""
     started = time.monotonic()
     try:
-        figures = zoomed_figures(cgimage, width, height, blocks, scale)
+        regions = figure_regions(cgimage, width, height, blocks, scale)
     except Exception:
         log.exception("Diagram detection failed; sending the screenshot alone")
-        return []
+        return [], []
+    try:
+        figures = zoomed_figures(cgimage, width, height, blocks, scale, regions=regions)
+    except Exception:
+        log.exception("Zooming the diagrams failed; sending the screenshot alone")
+        return regions, []
     if figures:
         log.info(
             "%d diagram(s) to zoom found in %.0f ms; views %s",
@@ -349,7 +367,42 @@ def _zoomed_figures(cgimage, width: int, height: int, blocks, scale: float) -> l
             (time.monotonic() - started) * 1000,
             [f"{f.image.width}x{f.image.height}" for f in figures],
         )
-    return figures
+    return regions, figures
+
+
+def _save_pictures(
+    analysis: Analysis,
+    cgimage,
+    width: int,
+    height: int,
+    regions: list[Rect],
+    solve: SolveConfig,
+    scale: float,
+    display_index: int,
+) -> None:
+    """Save questions: never fails the capture; a problem goes to analysis.save_error."""
+    try:
+        written = question_pictures.save(
+            cgimage,
+            width,
+            height,
+            analysis.questions,
+            {b.id: b.box for b in analysis.blocks},
+            regions,
+            solve.save_folder,
+            scale,
+            display=display_index,
+        )
+    except question_pictures.SaveError as exc:
+        analysis.save_error = str(exc)
+        log.warning("Questions not saved: %s", exc)
+        return
+    except Exception:
+        analysis.save_error = "Peek couldn't save the questions; see the log"
+        log.exception("Saving question pictures failed")
+        return
+    analysis.saved = len(written)
+    log.info("Saved %d question picture(s)", len(written))
 
 
 def _sent_box(rect, sx: float, sy: float) -> tuple[int, int, int, int]:
@@ -542,7 +595,7 @@ class Pipeline:
         started = time.monotonic()
         with objc.autorelease_pool():
             try:
-                for item in prepared:
+                for index, item in enumerate(prepared):
                     d = item.display
                     solve_into(
                         d.analysis,
@@ -554,6 +607,7 @@ class Pipeline:
                         token=job.token,
                         debug_folder=item.folder,
                         scale=d.scale,
+                        display_index=index,
                     )
                     item.image = None  # free the full-resolution screenshot
                     if d.analysis.error is not None:

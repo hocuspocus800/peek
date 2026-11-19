@@ -48,9 +48,17 @@ Peek opens a **Welcome to Peek** window:
 - **Provider:** pick Claude, ChatGPT or Gemini, connect it, and choose a model
   (each provider remembers its own).
 - **Hotkeys & capture:** double-tap speed (200-500 ms; regular shortcuts like ⌘C
-  never trigger it), which display to capture, launch at login.
+  never trigger it), which display to capture, launch at login, and **Save
+  questions** (off by default): after every capture, a picture of each question
+  (its text, answer area and nearby figure, without answers) is saved as a PNG in
+  a folder you choose.
 - **Overlay:** answer text size ("Match the question" or a fixed size), keep
   answers visible across captures, and a preview.
+- **Show work** (off by default): the model also writes out its working, shown in
+  a box on screen together with the answers (⌘⌘ shows and hides both). Drag the
+  box on the picture of your display to move it, drag an edge or corner to resize
+  it; the text is sized to fit the box. Its colour is yours to pick (yellow by
+  default). Asking for the working costs more output tokens per capture.
 
 ## Providers
 
@@ -81,8 +89,9 @@ subscription sign-in, so there is none.
 ## Privacy
 
 - Screenshots are kept in memory and go only to the provider you pick; they are
-  never written to disk (except with `--debug`, into
-  `~/Library/Application Support/Peek/debug/`).
+  never written to disk, except the question pictures Save questions writes to
+  the folder you chose, and with `--debug`, into
+  `~/Library/Application Support/Peek/debug/`.
 - API keys and ChatGPT tokens live only in your macOS Keychain. `settings.json`
   holds no secrets, and nothing secret is logged.
 - Peek's own windows are kept out of its screenshots.

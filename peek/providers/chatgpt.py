@@ -28,7 +28,7 @@ from collections.abc import Callable, Sequence
 from peek.imaging import SentImage
 from peek.providers.base import ModelInfo, ProviderError, SolveResult, VisionProvider
 from peek.providers.catalog import PROVIDERS
-from peek.schema import PORTABLE_SCHEMA, SYSTEM_PROMPT
+from peek.schema import request_format
 
 log = logging.getLogger(__name__)
 
@@ -104,40 +104,45 @@ class ChatGPTProvider(VisionProvider):
         *,
         extra_images: Sequence[tuple[str, SentImage]] = (),
         on_stream: Callable[[Callable[[], None]], None] | None = None,
+        show_work: bool = False,
     ) -> SolveResult:
         content = [_image(image)]
         for caption, extra in extra_images:
             content += [{"type": "input_text", "text": caption}, _image(extra)]
         content.append({"type": "input_text", "text": user_text})
+        system, schema = request_format(show_work)
         try:
-            return self._stream(model, content, structured=True, on_stream=on_stream)
+            return self._stream(model, content, system=system, schema=schema, on_stream=on_stream)
         except UnsupportedCapability as exc:
             log.warning("ChatGPT route rejected %s; asking without a JSON schema", exc.param)
             content[-1] = {
                 "type": "input_text",
-                "text": user_text + JSON_ONLY + _schema_text(),
+                "text": user_text + JSON_ONLY + _schema_text(schema),
             }
             try:
-                return self._stream(model, content, structured=False, on_stream=on_stream)
+                return self._stream(model, content, system=system, schema=None, on_stream=on_stream)
             except UnsupportedCapability as again:
                 raise ProviderError(
                     "failed", f"ChatGPT rejected part of the request ({again.param})"
                 ) from None
 
-    def _stream(self, model, content, *, structured: bool, on_stream) -> SolveResult:
+    def _stream(
+        self, model, content, *, system: str, schema: dict | None, on_stream
+    ) -> SolveResult:
+        """schema None: prompted JSON (the route refused a JSON schema)."""
         kwargs = {
             "model": model,
-            "instructions": SYSTEM_PROMPT,
+            "instructions": system,
             "input": [{"role": "user", "content": content}],
             "store": False,
             "stream": True,
         }
-        if structured:
+        if schema is not None:
             kwargs["text"] = {
                 "format": {
                     "type": "json_schema",
                     "name": "screen_answers",
-                    "schema": PORTABLE_SCHEMA,
+                    "schema": schema,
                     "strict": True,
                 }
             }
@@ -200,10 +205,10 @@ def _image(image: SentImage) -> dict:
     }
 
 
-def _schema_text() -> str:
+def _schema_text(schema: dict) -> str:
     import json
 
-    return json.dumps(PORTABLE_SCHEMA, separators=(",", ":"))
+    return json.dumps(schema, separators=(",", ":"))
 
 
 def _refusal(response) -> bool:

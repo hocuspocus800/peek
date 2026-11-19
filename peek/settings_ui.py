@@ -18,13 +18,17 @@ window).
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 
 import objc
 from AppKit import (
     NSBackingStoreBuffered,
     NSBezierPath,
+    NSButton,
     NSColor,
+    NSColorSpace,
+    NSColorWell,
     NSControlStateValueOff,
     NSControlStateValueOn,
     NSFont,
@@ -32,10 +36,13 @@ from AppKit import (
     NSLayoutAttributeCenterY,
     NSLayoutAttributeLeading,
     NSLayoutAttributeTop,
+    NSLineBreakByTruncatingMiddle,
     NSLineBreakByTruncatingTail,
     NSLineBreakByWordWrapping,
     NSMakeRect,
+    NSModalResponseOK,
     NSObject,
+    NSOpenPanel,
     NSPopUpButton,
     NSScrollView,
     NSSegmentedControl,
@@ -56,23 +63,24 @@ from AppKit import (
     NSWindowStyleMaskClosable,
     NSWindowStyleMaskTitled,
 )
-from Foundation import NSEdgeInsetsMake
+from Foundation import NSURL, NSEdgeInsetsMake
 
 from peek import store
 from peek.log import entry_point
 from peek.provider_panels import ChatGPTPanel, KeyProviderPanel
 from peek.providers.catalog import PROVIDERS
 from peek.ui_common import AnswerPreviewView, CardView, KeycapView
+from peek.work_box_view import WorkBoxView
 
 log = logging.getLogger(__name__)
 
 WINDOW_WIDTH = 720
 BODY_HEIGHT = 483  # Figma: 520 minus the 37 pt title bar
 SIDEBAR_WIDTH = 189
-PANES = ("Provider", "Hotkeys & capture", "Overlay")
+PANES = ("Provider", "Hotkeys & capture", "Overlay", "Show work")
 SIDEBAR_CELL = "pane-cell"
 SEGMENTS = ("claude", "chatgpt", "gemini")  # the provider segmented control, in order
-PROVIDER, HOTKEYS, OVERLAY = range(3)
+PROVIDER, HOTKEYS, OVERLAY, SHOW_WORK = range(4)
 
 LABEL_WIDTH = 92  # Claude panel (frame 3:101)
 PANE_LABEL_WIDTH = 120  # Hotkeys & capture and Overlay rows (frames 3:270, 3:340)
@@ -81,6 +89,10 @@ CONTENT_WIDTH = 475
 SPEED_NOTE = "Both taps must land within this window. Regular shortcuts like ⌘C never trigger it."
 DISPLAY_CHOICES = (("under_pointer", "Display under the pointer"), ("all", "All displays"))
 MATCH_LABEL = "Match the question"
+NO_FOLDER = "No folder chosen"
+WORK_NOTE = "Each question's working, in the box below. Uses more of your credit or plan."
+WORK_BOX_HINT = "Drag the box to move it, or an edge or corner to resize it. Arrow keys work too."
+WORK_BOX_HEIGHT = 226
 PREVIEW_MATCH_SIZE = 15.0  # the preview's question text, Figma
 
 
@@ -193,6 +205,15 @@ def text_size_title(size: int) -> str:
     return MATCH_LABEL if size == 0 else f"{size} pt"
 
 
+def folder_title(path: str) -> str:
+    """The Save questions folder as shown: '~/Documents/Questions', or a note."""
+    if not path:
+        return NO_FOLDER
+    home = os.path.expanduser("~")
+    shown = "~" + path[len(home) :] if path == home or path.startswith(home + "/") else path
+    return shown if os.path.isdir(path) else f"{shown} (missing)"
+
+
 class WindowBackgroundView(NSView):
     """The window's content view: paints the window background itself, so the
     panes render the same in screenshots taken offscreen."""
@@ -213,8 +234,10 @@ class SettingsController(NSObject):
         on_change: Callable[[], None],
         on_key_known: Callable[[bool | None, str], None],
         login_service=None,
+        choose_folder: Callable[[Callable[[str | None], None]], None] | None = None,
     ) -> None:
         self.key_caches = key_caches
+        self._choose_folder = choose_folder  # injected in tests; else an NSOpenPanel
         self.on_change = on_change
         self.on_key_known = on_key_known
         self._login_service = login_service  # injected in tests; else SMAppService
@@ -279,6 +302,7 @@ class SettingsController(NSObject):
             PROVIDER: self._build_provider_pane(),
             HOTKEYS: self._build_hotkeys_pane(),
             OVERLAY: self._build_overlay_pane(),
+            SHOW_WORK: self._build_show_work_pane(),
         }
         table.reloadData()
         table.selectRowIndexes_byExtendingSelection_(_index_set(PROVIDER), False)
@@ -319,6 +343,7 @@ class SettingsController(NSObject):
         # Closing (red button, ⌘W) does not end editing: a pasted key whose field
         # still has focus would never be saved. Ending editing fires its action.
         self.window.makeFirstResponder_(None)
+        self.work_color.deactivate()  # the colour panel goes with the window
 
     # NSTableViewDataSource / NSTableViewDelegate
 
@@ -375,6 +400,13 @@ class SettingsController(NSObject):
             NSControlStateValueOn if s.keep_answers_visible else NSControlStateValueOff
         )
         self.preview.set_text_size(s.answer_text_size or PREVIEW_MATCH_SIZE)
+        self._refresh_questions()
+        self.work_switch.setState_(NSControlStateValueOn if s.show_work else NSControlStateValueOff)
+        r, g, b = (c / 255 for c in s.work_rgb)
+        self.work_color.setColor_(NSColor.colorWithSRGBRed_green_blue_alpha_(r, g, b, 1.0))
+        self.work_box.set_box(s.work_box)
+        self.work_box.set_rgb(s.work_rgb)
+        self.work_box.set_enabled(s.show_work)
 
     @objc.python_method
     def _save(self, **changes) -> None:
@@ -524,10 +556,24 @@ class SettingsController(NSObject):
         self.login_switch = _switch(self, "loginToggled:")
         self.login_note = _label("", 12, secondary=True)
         login = _stack([self.login_switch, self.login_note], vertical=False, spacing=10)
+
+        self.questions_switch = _switch(self, "questionsToggled:")
+        self.folder_label = _label(NO_FOLDER, 12, secondary=True)
+        self.folder_label.setLineBreakMode_(NSLineBreakByTruncatingMiddle)
+        _fixed_width(self.folder_label, 168)
+        self.folder_button = NSButton.buttonWithTitle_target_action_(
+            "Choose…", self, "chooseFolder:"
+        )
+        questions = _stack(
+            [self.questions_switch, self.folder_label, self.folder_button],
+            vertical=False,
+            spacing=10,
+        )
         capture = _card(
             [
                 _row("Screen", self.display_popup, width=PANE_LABEL_WIDTH, centered=True),
                 _row("Launch at login", login, width=PANE_LABEL_WIDTH, centered=True),
+                _row("Save questions", questions, width=PANE_LABEL_WIDTH, centered=True),
             ]
         )
         title_hotkeys, title_capture = _heading("Hotkeys"), _heading("Capture")
@@ -625,6 +671,137 @@ class SettingsController(NSObject):
     @entry_point
     def keepVisibleToggled_(self, sender):
         self._save(keep_answers_visible=sender.state() == NSControlStateValueOn)
+
+    # --- Save questions (Hotkeys & capture pane) ----------------------------------
+
+    @objc.python_method
+    def _refresh_questions(self) -> None:
+        s = self.settings
+        on = s.save_questions and bool(s.save_questions_folder)
+        self.questions_switch.setState_(NSControlStateValueOn if on else NSControlStateValueOff)
+        self.folder_label.setStringValue_(folder_title(s.save_questions_folder))
+        self.folder_label.setToolTip_(s.save_questions_folder or None)
+
+    @objc.python_method
+    def _ask_for_folder(self, done: Callable[[str | None], None]) -> None:
+        """A folder chooser as a sheet on the Settings window; done(path or None)."""
+        if self._choose_folder is not None:
+            self._choose_folder(done)
+            return
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseDirectories_(True)
+        panel.setCanChooseFiles_(False)
+        panel.setCanCreateDirectories_(True)
+        panel.setAllowsMultipleSelection_(False)
+        panel.setPrompt_("Choose")
+        panel.setMessage_("Peek saves a picture of each question in this folder.")
+        current = self.settings.save_questions_folder
+        if current and os.path.isdir(current):
+            panel.setDirectoryURL_(NSURL.fileURLWithPath_(current))
+
+        def finished(response) -> None:
+            try:
+                url = panel.URL() if response == NSModalResponseOK else None
+                done(str(url.path()) if url is not None else None)
+            except Exception:
+                log.exception("Choosing the questions folder failed")
+
+        panel.beginSheetModalForWindow_completionHandler_(self.window, finished)
+
+    @entry_point
+    def questionsToggled_(self, sender):
+        self.settings = store.load_settings()
+        if sender.state() != NSControlStateValueOn:
+            self._save(save_questions=False)
+            log.info("Save questions: off")
+            self._refresh_questions()
+            return
+        folder = self.settings.save_questions_folder
+        if folder and os.path.isdir(folder):
+            self._save(save_questions=True)
+            log.info("Save questions: on")
+            self._refresh_questions()
+            return
+
+        def chosen(path: str | None) -> None:
+            if path:
+                self._save(save_questions=True, save_questions_folder=path)
+                log.info("Save questions: on (folder chosen)")
+            self._refresh_questions()  # cancelled: the switch goes back off
+
+        self._ask_for_folder(chosen)
+
+    @entry_point
+    def chooseFolder_(self, _sender):
+        def chosen(path: str | None) -> None:
+            if path:
+                # Choosing a folder means saving there: the switch turns on too.
+                self._save(save_questions=True, save_questions_folder=path)
+                log.info("Save questions: folder changed")
+            self._refresh_questions()
+
+        self._ask_for_folder(chosen)
+
+    # --- Show work pane ------------------------------------------------------------
+
+    @objc.python_method
+    def _build_show_work_pane(self) -> NSView:
+        self.work_switch = _switch(self, "showWorkToggled:")
+        switch_row = _stack(
+            [self.work_switch, _wrapping(WORK_NOTE, 260)], vertical=False, spacing=10
+        )
+        self.work_color = NSColorWell.alloc().initWithFrame_(NSMakeRect(0, 0, 44, 24))
+        _fixed_size(self.work_color, 44, 24)
+        if hasattr(self.work_color, "setSupportsAlpha_"):
+            self.work_color.setSupportsAlpha_(False)
+        self.work_color.setTarget_(self)
+        self.work_color.setAction_("workColorChosen:")
+        color_row = _stack(
+            [self.work_color, _label("Yellow by default", 12, secondary=True)],
+            vertical=False,
+            spacing=10,
+        )
+        card = _card(
+            [
+                _row("Show work", switch_row, width=PANE_LABEL_WIDTH, centered=True),
+                _row("Text colour", color_row, width=PANE_LABEL_WIDTH, centered=True),
+            ]
+        )
+        self.work_box = WorkBoxView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, CONTENT_WIDTH, WORK_BOX_HEIGHT)
+        )
+        _fixed_size(self.work_box, CONTENT_WIDTH, WORK_BOX_HEIGHT)
+        self.work_box.on_change = self._work_box_moved
+        hint = _label(WORK_BOX_HINT, 12, secondary=True)
+        where = _heading("Where the working shows")
+        return _pane(
+            [_heading("Show work"), card, where, self.work_box, hint],
+            spacing_after={self.work_box: 6},
+        )
+
+    @entry_point
+    def showWorkToggled_(self, sender):
+        on = sender.state() == NSControlStateValueOn
+        self.work_box.set_enabled(on)
+        self._save(show_work=on)
+        log.info("Show work: %s", "on" if on else "off")
+
+    @entry_point
+    def workColorChosen_(self, sender):
+        color = sender.color().colorUsingColorSpace_(NSColorSpace.sRGBColorSpace())
+        if color is None:
+            return
+        rgb = [
+            round(min(max(float(c), 0.0), 1.0) * 255)
+            for c in (color.redComponent(), color.greenComponent(), color.blueComponent())
+        ]
+        self.work_box.set_rgb(rgb)
+        if rgb != list(self.settings.work_rgb):
+            self._save(work_rgb=rgb)
+
+    @objc.python_method
+    def _work_box_moved(self, box) -> None:
+        self._save(work_box=store.valid_work_box(box))
 
 
 def _index_set(index: int):
