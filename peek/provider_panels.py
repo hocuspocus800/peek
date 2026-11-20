@@ -398,11 +398,13 @@ class KeyProviderPanel(NSObject):
         if not key:
             return  # leaving the field empty never deletes a stored key
         self.key_field.setStringValue_("")
-        prefix = self.spec.key_prefix
-        if not key.startswith(prefix):
+        prefixes = self.spec.key_prefixes
+        if prefixes and not key.startswith(prefixes):
+            shown = " or ".join(f"{p}…" for p in prefixes)
             self._set_status(
-                f"That doesn't look like a {self.spec.name} key ({prefix}…)", DotColor.DANGER
+                f"That doesn't look like a {self.spec.name} key ({shown})", DotColor.DANGER
             )
+            log.info("%s key not saved: it doesn't start with %s", self.spec.name, shown)
             return
         self._set_status("Saving…", DotColor.NEUTRAL)
         cache = self.key_cache

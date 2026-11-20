@@ -24,8 +24,9 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Anthropic keys (sk-ant-api03-...), OpenAI-style keys (sk-..., sk-proj-...).
     (re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{8,}"), "sk-ant-" + REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"), "sk-" + REDACTED),
-    # Google API keys.
+    # Google API keys: "AIza…" and, since May 2026, "AQ.…" auth keys.
     (re.compile(r"\bAIza[0-9A-Za-z_\-]{20,}"), "AIza" + REDACTED),
+    (re.compile(r"\bAQ\.[0-9A-Za-z_\-.]{20,}"), "AQ." + REDACTED),
     # JWTs (ChatGPT ID/access tokens): header.payload[.signature]
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,}(?:\.[A-Za-z0-9_\-]*)?"), REDACTED),
     # Authorization: Bearer <anything>

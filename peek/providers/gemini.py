@@ -194,8 +194,10 @@ def _map_error(exc: Exception) -> ProviderError:
         status = str(getattr(exc, "status", "") or "")
         message = str(getattr(exc, "message", "") or "")
         if code == 400 and ("API key" in message or "API_KEY" in message):
+            log.warning("Gemini rejected the API key: %s %s", code, status)
             return ProviderError("bad_key", "Google rejected this API key")
         if code in (401, 403):
+            log.warning("Gemini refused the API key: %s %s", code, status)  # no body
             if "leaked" in message.lower():
                 return ProviderError("bad_key", "Google blocked this key (reported as leaked)")
             return ProviderError("permission", "This key isn't allowed to use Gemini")

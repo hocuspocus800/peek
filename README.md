@@ -80,11 +80,11 @@ Peek's access. If OpenAI could not confirm it, you can also disconnect Peek in
 ChatGPT → Settings → Security.
 
 **Gemini (Google AI Studio API key).** **Get a free key in Google AI Studio**
-opens aistudio.google.com/apikey; paste the key (it starts with `AIza`). The model
-list comes from your account (default Gemini 3.8 Flash). On the free tier, Google
-may use your requests to improve its products, so avoid capturing private
-information. Google does not allow apps to use a Google account or Gemini
-subscription sign-in, so there is none.
+opens aistudio.google.com/apikey; paste the key (new keys start with `AQ.`, older
+ones with `AIza`). The model list comes from your account (default Gemini 3.8
+Flash). On the free tier, Google may use your requests to improve its products, so
+avoid capturing private information. Google does not allow apps to use a Google
+account or Gemini subscription sign-in, so there is none.
 
 ## Privacy
 

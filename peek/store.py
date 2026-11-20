@@ -182,11 +182,13 @@ def delete_secret(account: str) -> None:
 
 def mask_key(key: str) -> str:
     """As drawn in Figma: Anthropic 'sk-ant-' + bullets + the last four characters
-    (3:101); Google 'AIza' + bullets (3:205)."""
+    (3:101); Google 'AIza' + bullets (3:205), and the same for Google's newer
+    'AQ.' keys."""
     if not key:
         return ""
-    if key.startswith("AIza"):
-        return "AIza" + "•" * 24
+    for google in ("AQ.", "AIza"):
+        if key.startswith(google):
+            return google + "•" * 24
     prefix = "sk-ant-" if key.startswith("sk-ant-") else ""
     return f"{prefix}{'•' * 20}{key[-4:]}"
 

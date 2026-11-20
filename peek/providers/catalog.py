@@ -47,7 +47,8 @@ class ProviderSpec:
     name: str  # "Claude"
     vendor: str  # "Anthropic", for messages ("Add your Anthropic API key")
     key_account: str | None  # Keychain account of its API key; None: sign-in (ChatGPT)
-    key_prefix: str  # what a key starts with, for a friendly check before saving
+    # What a key may start with, for a friendly check before saving (empty: no key).
+    key_prefixes: tuple[str, ...]
     key_placeholder: str
     frame: str  # coordinates the model answers in: "pixels" or "normalized" (0-1000)
     default_model: str
@@ -118,7 +119,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         name="Claude",
         vendor="Anthropic",
         key_account="anthropic_api_key",
-        key_prefix="sk-ant-",
+        key_prefixes=("sk-ant-",),
         key_placeholder="Paste your Anthropic API key",
         frame="pixels",
         default_model="claude-sonnet-5-5",
@@ -131,7 +132,8 @@ PROVIDERS: dict[str, ProviderSpec] = {
         name="Gemini",
         vendor="Google AI Studio",
         key_account="gemini_api_key",
-        key_prefix="AIza",
+        # AI Studio has made "AQ." auth keys since 28 May 2026; older keys start "AIza".
+        key_prefixes=("AQ.", "AIza"),
         key_placeholder="Paste your Gemini API key",
         frame="normalized",
         default_model="gemini-3.8-flash",
@@ -145,7 +147,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         name="ChatGPT",
         vendor="ChatGPT",
         key_account=None,  # Sign in with ChatGPT (providers/oauth_chatgpt.py)
-        key_prefix="",
+        key_prefixes=(),
         key_placeholder="",
         frame="normalized",
         default_model="gpt-6.2-sol",
