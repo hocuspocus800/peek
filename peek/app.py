@@ -88,7 +88,7 @@ CAPTURE_PROBLEMS = {
 }
 # Provider errors show their own (safe) message; these kinds keep the red icon until
 # the next capture or a settings change.
-HOTKEY_SYMBOL = {Family.CONTROL: "⌃⌃", Family.COMMAND: "⌘⌘"}
+HOTKEY_SYMBOL = {Family.CONTROL: "⌃⌃", Family.COMMAND: "⌘⌘", Family.SHIFT: "⇧⇧"}
 INPUT_MONITORING_POLL_S = 2.0
 
 
@@ -198,6 +198,7 @@ class AppDelegate(NSObject):
         self.has_key: bool | None = None  # current provider; unknown until read
         self.settings_controller: SettingsController | None = None
         self.onboarding: OnboardingController | None = None
+        self._onboarding_panes: SettingsController | None = None  # its Provider pane
         self.last_answers: list[str] = []
         self._no_questions_token = 0
         self.overlay: Overlay | None = None
@@ -308,13 +309,19 @@ class AppDelegate(NSObject):
         return self.key_caches[self.provider]
 
     @objc.python_method
-    def _selected_model(self) -> str:
-        """The model chosen in Settings for the current provider."""
-        model = self.settings.model_for(self.provider)
-        listed = self.settings.model_lists.get(self.provider) or []
-        if self.spec.accepts_model(model) or (model and model in listed):
+    def _selected_model(self, provider: str | None = None) -> str:
+        """The model chosen in Settings for *provider* (default: the current one)."""
+        provider = provider or self.provider
+        spec = provider_spec(provider)
+        model = self.settings.model_for(provider)
+        listed = self.settings.model_lists.get(provider) or []
+        if spec.accepts_model(model) or (model and model in listed):
             return model
-        return listed[0] if listed and not self.spec.fixed_models else self.spec.default_model
+        # Nothing valid saved: the provider's default, as its Settings panel shows it.
+        # The account's first model only when the default is not one it can use.
+        default = spec.default_model
+        usable = spec.accepts_model(default) or default in listed
+        return listed[0] if listed and not spec.fixed_models and not usable else default
 
     @objc.python_method
     def _model(self) -> str:
@@ -338,6 +345,30 @@ class AppDelegate(NSObject):
                 best_model(self.provider, self.settings.model_lists.get(self.provider))
             ),
         )
+
+    @entry_point
+    def chooseProvider_(self, sender):
+        self._switch_provider(str(sender.representedObject()))
+
+    @objc.python_method
+    def _switch_provider(self, pid: str) -> None:
+        """The menu's quick switch: the same as picking *pid* in Settings. Captures
+        then use the model chosen for it there (or its best one in Hard mode)."""
+        if pid not in self.key_caches or pid == self.provider:
+            return
+        settings = store.load_settings()  # fresh: Settings may have saved meanwhile
+        settings.provider = pid
+        try:
+            store.save_settings(settings)
+        except OSError:
+            log.exception("Could not save the provider choice; still using %s", self.spec.name)
+            return
+        log.info("Provider set to %s from the menu", provider_spec(pid).name)
+        self._settings_changed()
+        # Windows showing the Provider pane follow (Settings, or the Welcome window).
+        for owner in (self.settings_controller, self._onboarding_panes):
+            if owner is not None:
+                owner.provider_changed()
 
     @entry_point
     def toggleHardMode_(self, sender):
@@ -420,17 +451,21 @@ class AppDelegate(NSObject):
         if self.provider != old_provider:
             log.info("Provider: %s", self.spec.name)
             self.has_key = None  # the new provider's key is read below
+            self.menu.set_manage_usage(False)  # that was the old provider's limit
             self._refresh_provider_status()
         if self.hotkeys is not None:
             self.hotkeys.set_gap_ms(self.settings.double_tap_ms)
         restyled = self.settings.answer_text_size != old_size or new_work != old_work
         if restyled and self._last_result and self.ctl.answers:
-            self._lay_out(self._last_result)  # redraw: new text size, work box or colour
+            # Redraw: new text size, work box or colour (Show work may be off now).
+            _placed, work = self._lay_out(self._last_result)
+            self._apply(self.ctl.work_changed(work))
         if self._unsaved_hard_mode is not None:
             self.settings.hard_mode = self._unsaved_hard_mode  # the user's last choice
             self._save_hard_mode()
         self._apply_hard_mode()
         self._capture_problem = None
+        self._apply_status()  # the old problem goes from the header now
         self._apply(self.ctl.problem_resolved())
         self._check_key_in_background()
 
@@ -490,6 +525,8 @@ class AppDelegate(NSObject):
         if family is Family.CONTROL:
             log.info("⌃⌃ double-tap: capture")
             self._start_capture()
+        elif family is Family.SHIFT:
+            self._toggle_work("⇧⇧ double-tap")
         else:
             self._toggle_answers("⌘⌘ double-tap")
 
@@ -501,6 +538,15 @@ class AppDelegate(NSObject):
             return
         self._apply(effects)
         log.info("%s: answers %s", source, "shown" if self.ctl.visible else "hidden")
+
+    @objc.python_method
+    def _toggle_work(self, source: str) -> None:
+        effects = self.ctl.toggle_work()
+        if not effects:
+            log.info("%s: no working to show (no-op)", source)
+            return
+        self._apply(effects)
+        log.info("%s: working %s", source, "shown" if self.ctl.work_visible else "hidden")
 
     @property
     def answers_visible(self) -> bool:
@@ -520,6 +566,10 @@ class AppDelegate(NSObject):
                 self.overlay.show()
             elif effect is Effect.HIDE and self.overlay is not None:
                 self.overlay.hide()
+            elif effect is Effect.SHOW_WORK and self.overlay is not None:
+                self.overlay.show_work()
+            elif effect is Effect.HIDE_WORK and self.overlay is not None:
+                self.overlay.hide_work()
             elif effect is Effect.NO_QUESTIONS:
                 self._show_no_questions()
         if self.icon is not None:
@@ -552,7 +602,9 @@ class AppDelegate(NSObject):
         self._clear_no_questions_label()
         # Spec: answers from the previous screen disappear as soon as a new capture
         # starts. Ordering the panels out first also keeps them out of the screenshot.
-        was_visible = self.overlay is not None and self.overlay.visible
+        was_visible = self.overlay is not None and (
+            self.overlay.visible or self.overlay.work_visible
+        )
         self._apply(self.ctl.start_capture(keep_visible=self.settings.keep_answers_visible))
         self.last_answers = []
         self.last_capture = None
@@ -625,14 +677,14 @@ class AppDelegate(NSObject):
         saved = sum(d.analysis.saved for d in result.displays)
         if saved:
             log.info("Capture g%d: %d question picture(s) saved", generation, saved)
-        placed = self._lay_out(result) if questions else 0
+        placed, work = self._lay_out(result) if questions else (0, False)
         self._last_result = result if placed else None
         if questions and placed:
             self.last_capture = (placed, time.time())
             self.last_answers = [f"{q.id} · {q.answer}  ({q.target_kind})" for q in questions]
             self._capture_problem = None
             self.menu.set_manage_usage(False)
-            self._apply(self.ctl.finish(generation, Outcome.ANSWERS, placed))
+            self._apply(self.ctl.finish(generation, Outcome.ANSWERS, placed, work=work))
             self._refresh_provider_status()
             log.info(
                 "Capture g%d: %d answers placed (%s)",
@@ -681,9 +733,10 @@ class AppDelegate(NSObject):
         self._apply_status()
 
     @objc.python_method
-    def _lay_out(self, result: PipelineResult) -> int:
-        """Place every display's answers on its overlay panel; returns how many."""
-        placed = 0
+    def _lay_out(self, result: PipelineResult) -> tuple[int, bool]:
+        """Place every display's answers (and working) on its overlay panel; returns
+        how many answers, and whether a work box was placed."""
+        placed, has_work = 0, False
         for d in result.displays:
             if not d.analysis.questions:
                 continue
@@ -712,18 +765,21 @@ class AppDelegate(NSObject):
                 measure,
                 ink_height,
             )
-            answers = len(items)  # the working is not an answer: never counted as one
-            if work is not None and answers:
-                items.append(work)  # shown and hidden with the answers
-            if not self.overlay.set_items(d.target.display_id, items):
+            # The working is not an answer: never counted as one. It is shown and
+            # hidden on its own (⇧⇧), so it goes to the overlay as a layer of its own.
+            work_items = [work] if work is not None and items else []
+            if not self.overlay.set_items(d.target.display_id, items, work_items):
                 continue  # the display went away during the capture
-            placed += answers
+            placed += len(items)
+            has_work = has_work or bool(work_items)
             if d.debug_dir:
                 folder, scale = Path(d.debug_dir), d.scale
                 threading.Thread(
-                    target=_write_layout_safely, args=(folder, items, scale), daemon=True
+                    target=_write_layout_safely,
+                    args=(folder, items + work_items, scale),
+                    daemon=True,
                 ).start()
-        return placed
+        return placed, has_work
 
     @entry_point
     def screensChanged_(self, _notification):
@@ -903,6 +959,18 @@ class AppDelegate(NSObject):
             self.menu.set_last_capture(line)
         has_answers = self.overlay is not None and self.overlay.has_answers
         self.menu.set_answers(available=has_answers, visible=self.answers_visible)
+        self.menu.set_work(
+            shown=self.settings.show_work or self.ctl.work,
+            available=self.ctl.work,
+            visible=self.ctl.work_visible,
+        )
+        self.menu.set_providers(
+            self.provider,
+            {
+                pid: provider_spec(pid).display_name(self._selected_model(pid))
+                for pid in self.key_caches
+            },
+        )
         if self.diag_items:
             self._refresh_diagnostics()
 
@@ -968,6 +1036,10 @@ class AppDelegate(NSObject):
     @entry_point
     def toggleAnswers_(self, _sender):
         self._toggle_answers("Show/Hide answers menu item")
+
+    @entry_point
+    def toggleWork_(self, _sender):
+        self._toggle_work("Show/Hide work menu item")
 
     @entry_point
     def openSettings_(self, _sender):

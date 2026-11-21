@@ -89,7 +89,9 @@ class KeycapView(NSView):
     @objc.python_method
     def set_glyph(self, glyph: str) -> None:
         self._glyph = glyph
-        self.setAccessibilityLabel_({"⌃": "Control", "⌘": "Command"}.get(glyph, glyph))
+        self.setAccessibilityLabel_(
+            {"⌃": "Control", "⌘": "Command", "⇧": "Shift"}.get(glyph, glyph)
+        )
         self.setNeedsDisplay_(True)
 
     def drawRect_(self, _rect):

@@ -13,6 +13,8 @@ Rules from the spec, plus the owner's choices:
   screenshot) and supersedes any capture in flight; a superseded capture's result
   is dropped by generation.
 - ⌘⌘ toggles answers that exist; with no answers it does nothing.
+- ⇧⇧ toggles the working (Settings → Show work) on its own, the same way: hidden
+  when it arrives unless "Keep visible" is on and it was showing.
 - If the displays change, answers (pinned to screen positions) are cleared and a
   capture in flight is dropped.
 """
@@ -34,6 +36,8 @@ class Effect(enum.Enum):
     CLEAR = "clear"  # take every answer off screen and forget them
     SHOW = "show"
     HIDE = "hide"
+    SHOW_WORK = "show_work"
+    HIDE_WORK = "hide_work"
     NO_QUESTIONS = "no_questions"  # the brief "No questions" label by the icon
 
 
@@ -51,6 +55,9 @@ class Controller:
     answers: int = 0  # answers placed on screen (0 = none to toggle)
     visible: bool = False
     show_on_arrival: bool = False
+    work: bool = False  # a work box was placed with the answers
+    work_visible: bool = False
+    work_on_arrival: bool = False
 
     # --- events -------------------------------------------------------------
 
@@ -60,10 +67,14 @@ class Controller:
         self.show_on_arrival = keep_visible and (
             self.visible or (replacing and self.show_on_arrival)
         )
+        self.work_on_arrival = keep_visible and (
+            self.work_visible or (replacing and self.work_on_arrival)
+        )
         self.generation += 1
         self.phase = Phase.WORKING
         self.answers = 0
         self.visible = False
+        self.work = self.work_visible = False
         return [Effect.CLEAR]
 
     def refuse_capture(self) -> list[Effect]:
@@ -72,19 +83,27 @@ class Controller:
             self.phase = Phase.ERROR
         return []
 
-    def finish(self, generation: int, outcome: Outcome, placed: int = 0) -> list[Effect] | None:
-        """A capture's result. None if it is stale (a newer capture was started, or
-        the displays changed); then nothing changes."""
+    def finish(
+        self, generation: int, outcome: Outcome, placed: int = 0, *, work: bool = False
+    ) -> list[Effect] | None:
+        """A capture's result (*work*: a work box was placed too). None if it is
+        stale (a newer capture was started, or the displays changed); then nothing
+        changes."""
         if generation != self.generation or self.phase is not Phase.WORKING:
             return None
         show, self.show_on_arrival = self.show_on_arrival, False
+        show_work, self.work_on_arrival = self.work_on_arrival, False
         if outcome is Outcome.ANSWERS and placed > 0:
             self.phase = Phase.READY
             self.answers = placed
             self.visible = show
-            return [Effect.SHOW] if show else []
+            self.work = work
+            self.work_visible = work and show_work
+            effects = [Effect.SHOW] if show else []
+            return effects + ([Effect.SHOW_WORK] if self.work_visible else [])
         self.answers = 0
         self.visible = False
+        self.work = self.work_visible = False
         if outcome is Outcome.NO_QUESTIONS:
             self.phase = Phase.IDLE
             return [Effect.NO_QUESTIONS]
@@ -98,6 +117,24 @@ class Controller:
         self.visible = not self.visible
         return [Effect.SHOW] if self.visible else [Effect.HIDE]
 
+    def toggle_work(self) -> list[Effect]:
+        """⇧⇧ or Show/Hide work. No working on screen: no-op."""
+        if not self.work:
+            return []
+        self.work_visible = not self.work_visible
+        return [Effect.SHOW_WORK] if self.work_visible else [Effect.HIDE_WORK]
+
+    def work_changed(self, work: bool) -> list[Effect]:
+        """The answers were laid out again (Settings changed): is there working now?
+        It keeps its visibility while it stays."""
+        if not self.answers:
+            return []
+        self.work = work
+        if not work and self.work_visible:
+            self.work_visible = False
+            return [Effect.HIDE_WORK]
+        return []
+
     def screens_changed(self) -> list[Effect]:
         """Displays added, removed or rearranged: positions are stale."""
         effects: list[Effect] = []
@@ -105,10 +142,12 @@ class Controller:
             self.generation += 1  # drop the capture taken on the old arrangement
             self.phase = Phase.IDLE
             self.show_on_arrival = False
+            self.work_on_arrival = False
         if self.answers:
             effects.append(Effect.CLEAR)
             self.answers = 0
             self.visible = False
+            self.work = self.work_visible = False
             if self.phase is Phase.READY:
                 self.phase = Phase.IDLE
         return effects
@@ -124,3 +163,7 @@ class Controller:
     @property
     def can_toggle(self) -> bool:
         return self.answers > 0
+
+    @property
+    def can_toggle_work(self) -> bool:
+        return self.work

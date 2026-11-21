@@ -17,6 +17,7 @@ from AppKit import (
     NSControlStateValueOn,
     NSEventModifierFlagCommand,
     NSEventModifierFlagControl,
+    NSEventModifierFlagShift,
     NSFont,
     NSFontAttributeName,
     NSFontWeightSemibold,
@@ -32,6 +33,7 @@ from AppKit import (
     NSViewWidthSizable,
 )
 
+from peek.providers.catalog import PROVIDER_ORDER, PROVIDERS
 from peek.status import HeaderStatus
 from peek.ui_common import StatusDotView
 
@@ -167,6 +169,15 @@ def _item(title: str, action: str | None, key: str = "", mask: int = 0, target=N
     return item
 
 
+def _section_header(title: str) -> NSMenuItem:
+    """A small grey heading over a group of items (macOS 14's section header)."""
+    if hasattr(NSMenuItem, "sectionHeaderWithTitle_"):
+        return NSMenuItem.sectionHeaderWithTitle_(title)
+    item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
+    item.setEnabled_(False)
+    return item
+
+
 def _info_title(text: str) -> NSAttributedString:
     return NSAttributedString.alloc().initWithString_attributes_(
         text,
@@ -195,7 +206,7 @@ class StatusMenu:
         menu.addItem_(header_item)
         menu.addItem_(NSMenuItem.separatorItem())
 
-        # "⌃⌃" and "⌘⌘" are double-taps, not real key equivalents. Using the modifier
+        # "⌃⌃", "⌘⌘" and "⇧⇧" are double-taps, not real key equivalents. Using the modifier
         # glyph itself as the key character makes AppKit draw "⌃⌃" / "⌘⌘" in the
         # native shortcut column; no keyboard can type those characters, so the
         # items never fire from the keyboard.
@@ -206,13 +217,33 @@ class StatusMenu:
             "Show answers", "toggleAnswers:", "⌘", NSEventModifierFlagCommand, target
         )
         self.toggle.setEnabled_(False)
+        # Only while Settings → Show work is on (or its working is still on screen).
+        self.work_toggle = _item("Show work", "toggleWork:", "⇧", NSEventModifierFlagShift, target)
+        self.work_toggle.setEnabled_(False)
+        self.work_toggle.setHidden_(True)
         self.last_capture = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("", None, "")
         self.last_capture.setEnabled_(False)
         self.last_capture.setHidden_(True)
         # Shown only after a ChatGPT usage-limit error (spec: "Manage usage" link).
         self.manage_usage = _item("Manage ChatGPT usage…", "manageUsage:", target=target)
         self.manage_usage.setHidden_(True)
-        for item in (self.capture, self.toggle, self.last_capture, self.manage_usage):
+        for item in (
+            self.capture,
+            self.toggle,
+            self.work_toggle,
+            self.last_capture,
+            self.manage_usage,
+        ):
+            menu.addItem_(item)
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        # Quick switch: each provider with the model chosen for it in Settings.
+        menu.addItem_(_section_header("AI provider"))
+        self.provider_items: dict[str, NSMenuItem] = {}
+        for pid in PROVIDER_ORDER:
+            item = _item(PROVIDERS[pid].name, "chooseProvider:", target=target)
+            item.setRepresentedObject_(pid)
+            self.provider_items[pid] = item
             menu.addItem_(item)
         menu.addItem_(NSMenuItem.separatorItem())
 
@@ -250,6 +281,21 @@ class StatusMenu:
     def set_answers(self, *, available: bool, visible: bool) -> None:
         self.toggle.setEnabled_(available)
         self.toggle.setTitle_("Hide answers" if (available and visible) else "Show answers")
+
+    def set_work(self, *, shown: bool, available: bool, visible: bool) -> None:
+        self.work_toggle.setHidden_(not shown)
+        self.work_toggle.setEnabled_(available)
+        self.work_toggle.setTitle_("Hide work" if (available and visible) else "Show work")
+
+    def set_providers(self, current: str, models: dict[str, str]) -> None:
+        """A check by the provider captures use; under each name, its model."""
+        for pid, item in self.provider_items.items():
+            item.setState_(NSControlStateValueOn if pid == current else NSControlStateValueOff)
+            model = models.get(pid, "")
+            if item.respondsToSelector_("setSubtitle:"):  # macOS 14.4 and later
+                item.setSubtitle_(model)
+            else:
+                item.setToolTip_(model)
 
     def set_last_capture(self, text: str | None) -> None:
         if text is None:

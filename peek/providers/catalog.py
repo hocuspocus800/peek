@@ -37,6 +37,7 @@ GEMINI_MODELS = (
 # examples use these slugs. The account's list replaces them in Settings.
 CHATGPT_MODELS = (
     ModelInfo("gpt-6.2-sol", "GPT-6.2 Sol"),
+    ModelInfo("gpt-6.2-astra", "GPT-6.2 Astra"),
     ModelInfo("gpt-6.1-sol", "GPT-6.1 Sol"),
 )
 
@@ -84,8 +85,9 @@ class ProviderSpec:
         """Hard mode's model. Fixed lists: the catalog's best. From the account: the
         newest full-size family (the version right after the prefix: 'gemini-4-…' is
         4, 'gpt-6.2-…' is 6.2; not mini/nano/lite), stable models before previews,
-        experiments and dated snapshots; among equals the catalog's best, then the
-        catalog's order, then the account's. No list: the catalog's best."""
+        experiments and dated snapshots; within a version the frontier tier (Astra
+        before Sol); among equals the catalog's best, then the catalog's order, then
+        the account's. No list: the catalog's best."""
         if self.fixed_models or not available:
             return self.best_model
         full = [m for m in available if not _SMALL.search(m)] or list(available)
@@ -95,6 +97,7 @@ class ProviderSpec:
             return (
                 not _UNSTABLE.search(m),
                 self._family(m),
+                bool(_FRONTIER.search(m)),
                 m == self.best_model,
                 -known.index(m) if m in known else -len(known),
                 -available.index(m),
@@ -112,6 +115,9 @@ class ProviderSpec:
                 return m.name
         return pretty_model_name(model_id)
 
+
+# How providers are listed to the user: Settings' segmented control and the menu.
+PROVIDER_ORDER = ("claude", "chatgpt", "gemini")
 
 PROVIDERS: dict[str, ProviderSpec] = {
     "claude": ProviderSpec(
@@ -151,13 +157,17 @@ PROVIDERS: dict[str, ProviderSpec] = {
         key_placeholder="",
         frame="normalized",
         default_model="gpt-6.2-sol",
-        best_model="gpt-6.2-sol",
+        # Astra is OpenAI's frontier tier (Sol the everyday one, about 4x cheaper).
+        best_model="gpt-6.2-astra",
         models=CHATGPT_MODELS,
         fixed_models=False,
         model_prefix="gpt-",
     ),
 }
 
+# A model line's top tier, above its siblings of the same version (gpt-6.2-astra
+# over gpt-6.2-sol).
+_FRONTIER = re.compile(r"(^|-)astra($|-)")
 _SMALL = re.compile(r"(^|-)(mini|nano|lite|flash-lite|small)($|-)")
 
 

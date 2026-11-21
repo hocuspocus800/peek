@@ -2,7 +2,7 @@
 
 - Provider: heading, provider segmented control, the provider's panel (Claude:
   API key, Test connection + status, Model pop-up), footer.
-- Hotkeys & capture: the two double-tap keycaps, the double-tap speed slider
+- Hotkeys & capture: the three double-tap keycaps, the double-tap speed slider
   (200-500 ms), which display to capture, launch at login (SMAppService).
 - Overlay: answer text size ("Match the question" or a fixed size), keep answers
   visible across captures, and a preview of the owner's answer style (plain text
@@ -68,7 +68,7 @@ from Foundation import NSURL, NSEdgeInsetsMake
 from peek import store
 from peek.log import entry_point
 from peek.provider_panels import ChatGPTPanel, KeyProviderPanel
-from peek.providers.catalog import PROVIDERS
+from peek.providers.catalog import PROVIDER_ORDER, PROVIDERS
 from peek.ui_common import AnswerPreviewView, CardView, KeycapView
 from peek.work_box_view import WorkBoxView
 
@@ -79,7 +79,7 @@ BODY_HEIGHT = 483  # Figma: 520 minus the 37 pt title bar
 SIDEBAR_WIDTH = 189
 PANES = ("Provider", "Hotkeys & capture", "Overlay", "Show work")
 SIDEBAR_CELL = "pane-cell"
-SEGMENTS = ("claude", "chatgpt", "gemini")  # the provider segmented control, in order
+SEGMENTS = PROVIDER_ORDER  # the provider segmented control, in order
 PROVIDER, HOTKEYS, OVERLAY, SHOW_WORK = range(4)
 
 LABEL_WIDTH = 92  # Claude panel (frame 3:101)
@@ -90,7 +90,10 @@ SPEED_NOTE = "Both taps must land within this window. Regular shortcuts like ⌘
 DISPLAY_CHOICES = (("under_pointer", "Display under the pointer"), ("all", "All displays"))
 MATCH_LABEL = "Match the question"
 NO_FOLDER = "No folder chosen"
-WORK_NOTE = "Each question's working, in the box below. Uses more of your credit or plan."
+WORK_NOTE = (
+    "Each question's working, in the box below; double-tap Shift to show or hide it. "
+    "Uses more of your credit or plan."
+)
 WORK_BOX_HINT = "Drag the box to move it, or an edge or corner to resize it. Arrow keys work too."
 WORK_BOX_HEIGHT = 226
 PREVIEW_MATCH_SIZE = 15.0  # the preview's question text, Figma
@@ -247,6 +250,7 @@ class SettingsController(NSObject):
         self._current = None
         self.panels: dict[str, KeyProviderPanel] = {}
         self._shown_panel = None
+        self.provider_segments = None  # built with the Provider pane
 
     # --- window -------------------------------------------------------------
 
@@ -485,6 +489,15 @@ class SettingsController(NSObject):
         self.panel_host.addArrangedSubview_(panel.view)
         self._shown_panel = panel
 
+    @objc.python_method
+    def provider_changed(self) -> None:
+        """The provider was switched somewhere else (the menu): show it here too."""
+        if self.provider_segments is None:
+            return  # the Provider pane was never built: it loads fresh when it is
+        self.settings = store.load_settings()
+        self._show_provider(self.settings.provider)
+        self._shown_panel.refresh(self.settings)
+
     @entry_point
     def providerChosen_(self, sender):
         pid = SEGMENTS[int(sender.selectedSegment())]
@@ -536,6 +549,12 @@ class SettingsController(NSObject):
                 _row(
                     "Show / hide",
                     _keycaps("⌘", "Double-tap Command"),
+                    width=PANE_LABEL_WIDTH,
+                    centered=True,
+                ),
+                _row(
+                    "Show / hide work",
+                    _keycaps("⇧", "Double-tap Shift"),
                     width=PANE_LABEL_WIDTH,
                     centered=True,
                 ),

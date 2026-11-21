@@ -1,4 +1,4 @@
-"""Double-tap detection for Control and Command: a pure state machine.
+"""Double-tap detection for Control, Command and Shift: a pure state machine.
 
 No AppKit or Quartz here; `peek.event_tap` feeds it real events. Every event
 carries the full modifier flag word, so the set of held keys is recomputed from
@@ -6,7 +6,7 @@ each event instead of being tracked incrementally (which drifts after a missed
 key-up).
 
 Definitions (spec, "Hotkeys"):
-- A *tap* is one Control (or Command) key going down while no other modifier is
+- A *tap* is one Control (Command, Shift) key going down while no other modifier is
   held, and coming back up within `tap_max_ms` (250 ms) with nothing else in
   between: no other key, no other modifier, no mouse button, no scroll while held.
 - A *double-tap* is two taps of the same family (left or right key, mixed freely)
@@ -65,8 +65,9 @@ MODIFIER_KEYCODES = frozenset({54, 55, 56, 58, 59, 60, 61, 62})
 
 
 class Family(Enum):
-    CONTROL = "control"
-    COMMAND = "command"
+    CONTROL = "control"  # ⌃⌃: capture and solve
+    COMMAND = "command"  # ⌘⌘: show or hide the answers
+    SHIFT = "shift"  # ⇧⇧: show or hide the working (Settings → Show work)
 
 
 _FAMILY_OF_KEY = {
@@ -76,6 +77,9 @@ _FAMILY_OF_KEY = {
     "lcmd": Family.COMMAND,
     "rcmd": Family.COMMAND,
     "cmd": Family.COMMAND,
+    "lshift": Family.SHIFT,
+    "rshift": Family.SHIFT,
+    "shift": Family.SHIFT,
 }
 
 

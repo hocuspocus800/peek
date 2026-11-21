@@ -3,7 +3,8 @@
 A macOS menu-bar app, written in Python. Double-tap **Control** to capture the
 screen; an AI model finds every question on it and answers it. Double-tap
 **Command** to show or hide the answers, drawn in a click-through overlay where
-each answer belongs.
+each answer belongs. With Show work on, double-tap **Shift** to show or hide the
+working.
 
 Requirements: macOS 14 or later (developed and tested on macOS 26.3, Apple
 Silicon; an Intel build is made separately, see below).
@@ -13,7 +14,7 @@ Silicon; an Intel build is made separately, see below).
 Peek opens a **Welcome to Peek** window:
 
 1. **Permissions.** Screen Recording (to take the screenshot you ask for) and
-   Input Monitoring (to notice a double-tap on Control or Command). **Open System
+   Input Monitoring (to notice a double-tap on Control, Command or Shift). **Open System
    Settings** asks macOS and opens the right pane. macOS often applies a grant only
    after Peek restarts: use **Quit & Reopen** on the card, and the window comes
    back where you left off. **Continue** unlocks when both say Granted.
@@ -26,14 +27,21 @@ Peek opens a **Welcome to Peek** window:
   displays, see Settings) and solve. A new ⌃⌃ replaces a capture in progress.
 - **⌘⌘** (double-tap Command): show or hide the answers. They are hidden when they
   arrive, unless "Keep visible" is on and answers were showing.
+- **⇧⇧** (double-tap Shift): show or hide the working, when Show work is on. It
+  is separate from the answers, and hidden when it arrives (unless "Keep visible"
+  is on and it was showing).
 - Answers are drawn as plain text in each question's own colour and size, in the
   answer box, on the blank line or under the question; a multiple-choice answer is
   the option's letter in **yellow** at the end of the question.
+- **AI provider** (in the menu): a quick switch between Claude, ChatGPT and Gemini.
+  Each one is listed with the model chosen for it in Settings, and that is the
+  model it uses (its most capable one while Hard mode is on). It is the same
+  choice as the provider picker in Settings.
 - The menu-bar eye shows the state: plain (idle), dashed (working), blue dot
   (answers ready), red dot (a problem, explained at the top of the menu).
 - **Hard mode** (the switch in the menu) answers with the current provider's most
-  capable model (Claude Fable 5.2, Gemini 4 Carbon, or the newest full-size model
-  of your ChatGPT account) until you turn it off; then Peek goes back to the model
+  capable model (Claude Fable 5.2, Gemini 4 Carbon, or the newest Astra model of
+  your ChatGPT account, such as GPT-6.2 Astra) until you turn it off; then Peek goes back to the model
   chosen in Settings. It is slower and costs several times more per capture, so it
   is never switched on automatically.
 - **Diagrams.** When the screen shows a figure (a technical drawing, a circuit, a
@@ -55,7 +63,7 @@ Peek opens a **Welcome to Peek** window:
 - **Overlay:** answer text size ("Match the question" or a fixed size), keep
   answers visible across captures, and a preview.
 - **Show work** (off by default): the model also writes out its working, shown in
-  a box on screen together with the answers (⌘⌘ shows and hides both). Drag the
+  a box on screen; ⇧⇧ shows and hides it, separately from the answers. Drag the
   box on the picture of your display to move it, drag an edge or corner to resize
   it; the text is sized to fit the box. Its colour is yours to pick (yellow by
   default). Asking for the working costs more output tokens per capture.

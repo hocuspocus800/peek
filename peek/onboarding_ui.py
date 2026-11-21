@@ -67,7 +67,7 @@ CARDS = {
     INPUT: (
         "keyboard",
         "Input Monitoring",
-        "Lets Peek notice a double-tap on Control or Command.",
+        "Lets Peek notice a double-tap on Control, Command or Shift.",
         permissions.INPUT_MONITORING_URL,
     ),
 }

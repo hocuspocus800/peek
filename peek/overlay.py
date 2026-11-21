@@ -154,17 +154,24 @@ def _make_panel(screen) -> OverlayPanel:
 
 
 class Overlay:
-    """Owns the panels. Items are kept per display id; show()/hide() switch them all."""
+    """Owns the panels. Answers and the work box are kept per display id, as two
+    layers: show()/hide() switch the answers, show_work()/hide_work() the working."""
 
     def __init__(self) -> None:
         self._panels: dict[int, OverlayPanel] = {}
         self._items: dict[int, list[DrawItem]] = {}
+        self._work: dict[int, list[DrawItem]] = {}
         self.visible = False
+        self.work_visible = False
         self.rebuild()
 
     @property
     def has_answers(self) -> bool:
         return any(self._items.values())
+
+    @property
+    def has_work(self) -> bool:
+        return any(self._work.values())
 
     def screen_size(self, display_id: int) -> tuple[float, float] | None:
         panel = self._panels.get(display_id)
@@ -180,39 +187,61 @@ class Overlay:
             panel.orderOut_(None)
         self._panels = {_screen_id(s): _make_panel(s) for s in NSScreen.screens()}
         self._items = {}
-        self.visible = False
+        self._work = {}
+        self.visible = self.work_visible = False
         log.info("Overlay panels for displays %s", sorted(self._panels))
 
-    def set_items(self, display_id: int, items: list[DrawItem]) -> bool:
-        """Store and draw a display's answers; False if that display has no panel."""
+    def set_items(self, display_id: int, items: list[DrawItem], work: list[DrawItem] = ()) -> bool:
+        """Store and draw a display's answers and working; False if that display has
+        no panel. Each layer shows only while it is switched on."""
         if display_id not in self._panels:
             log.warning("No overlay panel for display %d; answers not shown", display_id)
             return False
         self._items[display_id] = list(items)
-        view = self._panels[display_id].contentView()
-        view.items = list(items)
-        view.setNeedsDisplay_(True)
-        if self.visible:
-            self._panels[display_id].orderFrontRegardless()
+        self._work[display_id] = list(work)
+        self._redraw(display_id)
         return True
 
     def clear(self) -> None:
-        self.hide()
         self._items = {}
-        for panel in self._panels.values():
-            panel.contentView().items = []
-            panel.contentView().setNeedsDisplay_(True)
+        self._work = {}
+        self.visible = self.work_visible = False
+        self._redraw_all()
 
     def show(self) -> None:
         self.visible = True
-        for display_id, panel in self._panels.items():
-            if self._items.get(display_id):
-                panel.orderFrontRegardless()
+        self._redraw_all()
 
     def hide(self) -> None:
-        """Hidden state: nothing on screen at all (Figma 3:400)."""
+        """Answers hidden. With the working hidden too, nothing is on screen at all
+        (Figma 3:400)."""
         self.visible = False
-        for panel in self._panels.values():
+        self._redraw_all()
+
+    def show_work(self) -> None:
+        self.work_visible = True
+        self._redraw_all()
+
+    def hide_work(self) -> None:
+        self.work_visible = False
+        self._redraw_all()
+
+    def _redraw_all(self) -> None:
+        for display_id in self._panels:
+            self._redraw(display_id)
+
+    def _redraw(self, display_id: int) -> None:
+        """Draw the layers that are on; a panel with nothing to draw is ordered out."""
+        panel = self._panels[display_id]
+        items = list(self._items.get(display_id, ())) if self.visible else []
+        if self.work_visible:
+            items += self._work.get(display_id, ())
+        view = panel.contentView()
+        view.items = items
+        view.setNeedsDisplay_(True)
+        if items:
+            panel.orderFrontRegardless()
+        else:
             panel.orderOut_(None)
 
     def window_numbers(self) -> list[int]:
