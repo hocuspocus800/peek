@@ -146,6 +146,7 @@ def _make_panel(screen) -> OverlayPanel:
     )
     panel.setSharingType_(NSWindowSharingNone)
     panel.setHidesOnDeactivate_(False)
+    panel.setCanHide_(False)  # "Hide Peek" / "Hide Others" must not take the answers away
     panel.setReleasedWhenClosed_(False)
     panel.setAnimationBehavior_(NSWindowAnimationBehaviorNone)
     view = OverlayView.alloc().initWithFrame_(NSMakeRect(0, 0, frame.size.width, frame.size.height))
@@ -241,8 +242,53 @@ class Overlay:
         view.setNeedsDisplay_(True)
         if items:
             panel.orderFrontRegardless()
+            self._check_shown_later(display_id, panel)
         else:
             panel.orderOut_(None)
 
+    def _check_shown_later(self, display_id: int, panel: OverlayPanel) -> None:
+        """Log what macOS says about a panel that should be on screen and is not
+        (the window list catches up a moment after ordering front)."""
+        try:
+            from PyObjCTools import AppHelper
+        except ImportError:
+            return
+
+        def check() -> None:
+            try:
+                if self._panels.get(display_id) is not panel or not panel.contentView().items:
+                    return  # rebuilt or hidden again meanwhile
+                number = int(panel.windowNumber())
+                if _on_screen(number):
+                    return
+                from AppKit import NSApp
+
+                frame = panel.frame()
+                log.warning(
+                    "Overlay for display %d is not on screen: visible %s, active space %s, "
+                    "occlusion %s, level %s, alpha %.2f, app hidden %s, frame %s",
+                    display_id,
+                    bool(panel.isVisible()),
+                    bool(panel.isOnActiveSpace()),
+                    int(panel.occlusionState()),
+                    int(panel.level()),
+                    float(panel.alphaValue()),
+                    bool(NSApp.isHidden()) if NSApp is not None else None,
+                    (frame.origin.x, frame.origin.y, frame.size.width, frame.size.height),
+                )
+            except Exception:
+                log.exception("Checking the overlay failed")
+
+        AppHelper.callLater(0.4, check)
+
     def window_numbers(self) -> list[int]:
         return [int(p.windowNumber()) for p in self._panels.values()]
+
+
+def _on_screen(window_number: int) -> bool:
+    import Quartz
+
+    info = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionIncludingWindow, window_number
+    )
+    return bool(info) and bool(info[0].get("kCGWindowIsOnscreen"))
