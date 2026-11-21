@@ -246,43 +246,83 @@ class Overlay:
         else:
             panel.orderOut_(None)
 
-    def _check_shown_later(self, display_id: int, panel: OverlayPanel) -> None:
-        """Log what macOS says about a panel that should be on screen and is not
-        (the window list catches up a moment after ordering front)."""
+    def _check_shown_later(
+        self, display_id: int, panel: OverlayPanel, *, may_replace: bool = True
+    ) -> None:
+        """Check a moment later (the window list catches up after ordering front)."""
         try:
             from PyObjCTools import AppHelper
         except ImportError:
             return
+        AppHelper.callLater(
+            CHECK_DELAY_S, lambda: self.check_shown(display_id, panel, may_replace=may_replace)
+        )
 
-        def check() -> None:
-            try:
-                if self._panels.get(display_id) is not panel or not panel.contentView().items:
-                    return  # rebuilt or hidden again meanwhile
-                number = int(panel.windowNumber())
-                if _on_screen(number):
-                    return
-                from AppKit import NSApp
+    def check_shown(
+        self, display_id: int, panel: OverlayPanel, *, may_replace: bool = True
+    ) -> None:
+        """A panel that should be on screen and is not: log what macOS says about it.
+        When it has left the Space being looked at (seen over full-screen apps after
+        Peek had been running a while; a new panel joins it fine), swap in a new panel
+        once."""
+        try:
+            if self._panels.get(display_id) is not panel or not panel.contentView().items:
+                return  # rebuilt or hidden again meanwhile
+            if _on_screen(int(panel.windowNumber())):
+                return
+            from AppKit import NSApp
 
-                frame = panel.frame()
-                log.warning(
-                    "Overlay for display %d is not on screen: visible %s, active space %s, "
-                    "occlusion %s, level %s, alpha %.2f, app hidden %s, frame %s",
-                    display_id,
-                    bool(panel.isVisible()),
-                    bool(panel.isOnActiveSpace()),
-                    int(panel.occlusionState()),
-                    int(panel.level()),
-                    float(panel.alphaValue()),
-                    bool(NSApp.isHidden()) if NSApp is not None else None,
-                    (frame.origin.x, frame.origin.y, frame.size.width, frame.size.height),
-                )
-            except Exception:
-                log.exception("Checking the overlay failed")
+            on_space = _on_active_space(panel)
+            frame = panel.frame()
+            log.warning(
+                "Overlay for display %d is not on screen: visible %s, active space %s, "
+                "occlusion %s, level %s, alpha %.2f, app hidden %s, behavior %#x, "
+                "policy %s, frame %s",
+                display_id,
+                bool(panel.isVisible()),
+                on_space,
+                int(panel.occlusionState()),
+                int(panel.level()),
+                float(panel.alphaValue()),
+                bool(NSApp.isHidden()) if NSApp is not None else None,
+                int(panel.collectionBehavior()),
+                int(NSApp.activationPolicy()) if NSApp is not None else None,
+                (frame.origin.x, frame.origin.y, frame.size.width, frame.size.height),
+            )
+            if not on_space and may_replace:
+                self._replace_panel(display_id, panel)
+        except Exception:
+            log.exception("Checking the overlay failed")
 
-        AppHelper.callLater(0.4, check)
+    def _replace_panel(self, display_id: int, old: OverlayPanel) -> None:
+        """A new panel for the display, drawing what the old one drew."""
+        screen = next((s for s in NSScreen.screens() if _screen_id(s) == display_id), None)
+        if screen is None:
+            return
+        new = _make_panel(screen)
+        new.contentView().items = list(old.contentView().items)
+        old.orderOut_(None)
+        self._panels[display_id] = new
+        new.orderFrontRegardless()
+        log.info("Overlay for display %d: new panel, as the old one left the Space", display_id)
+        self._check_shown_later(display_id, new, may_replace=False)  # logs if still off
+
+    def space_changed(self) -> None:
+        """The Space being looked at changed: check every panel that is showing
+        something (it should have come along)."""
+        for display_id, panel in list(self._panels.items()):
+            if panel.contentView().items:
+                self._check_shown_later(display_id, panel)
 
     def window_numbers(self) -> list[int]:
         return [int(p.windowNumber()) for p in self._panels.values()]
+
+
+CHECK_DELAY_S = 0.4
+
+
+def _on_active_space(panel) -> bool:
+    return bool(panel.isOnActiveSpace())
 
 
 def _on_screen(window_number: int) -> bool:

@@ -35,6 +35,7 @@ from AppKit import (
     NSTimer,
     NSVariableStatusItemLength,
     NSWorkspace,
+    NSWorkspaceActiveSpaceDidChangeNotification,
     NSWorkspaceDidWakeNotification,
 )
 from Foundation import NSBundle, NSNotificationCenter
@@ -266,6 +267,9 @@ class AppDelegate(NSObject):
         self.overlay = Overlay()
         NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
             self, "screensChanged:", NSApplicationDidChangeScreenParametersNotification, None
+        )
+        NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
+            self, "spaceChanged:", NSWorkspaceActiveSpaceDidChangeNotification, None
         )
         self._check_key_in_background()
         if not self.settings.onboarding_done and not (
@@ -780,6 +784,13 @@ class AppDelegate(NSObject):
                     daemon=True,
                 ).start()
         return placed, has_work
+
+    @entry_point
+    def spaceChanged_(self, _notification):
+        """Another Space (a full-screen app, another desktop): what is showing must
+        have come along; the overlay checks and repairs its panels."""
+        if self.overlay is not None:
+            self.overlay.space_changed()
 
     @entry_point
     def screensChanged_(self, _notification):
